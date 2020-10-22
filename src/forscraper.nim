@@ -56,9 +56,9 @@ proc getThread(n: JsonNode): ForumThread =
     activity: fromUnix(n["activity"].getInt())
   )
 
-proc getLastThreads(count = 10): Future[seq[ForumThread]] {.async.} =
+proc getLastThreads(start = 0, count = 30): Future[seq[ForumThread]] {.async.} =
   var client = newAsyncHttpClient()
-  var resp = await client.get(fmt"{ThreadsUrl}?count={count}")
+  var resp = await client.get(fmt"{ThreadsUrl}?start={start}&count={count}")
   if resp.code != Http200:
     return
 
@@ -103,7 +103,7 @@ proc makeThreadEntry(thr: ForumThread): VNode =
       td(class="thread-author"): text "placeholder" #$thr.author
       td(class="hide-sm views-text"): text $thr.views
 
-proc makeThreadsList(threads: seq[ForumThread]): VNode =
+proc makeThreadsList(p: int, threads: seq[ForumThread]): VNode =
   result = buildHtml():
       table(id="threads-list", class="table"):
         thead:
@@ -116,7 +116,12 @@ proc makeThreadsList(threads: seq[ForumThread]): VNode =
           for thr in threads:
             makeThreadEntry(thr)
 
-proc makeMainPage(threads: seq[ForumThread]): string =
+          tr(class = "load-more-separator"):
+            td(colspan = "6"):
+              a(href = "/p/" & $(p + 1)):
+                text "Go to the next page"
+
+proc makeMainPage(page: int, threads: seq[ForumThread]): string =
   let vnode = buildHtml():
     html:
       head:
@@ -127,7 +132,7 @@ proc makeMainPage(threads: seq[ForumThread]): string =
         title: text "Test forum"
       body:
         section(class = "thread-list"):
-          makeThreadsList(threads)
+          makeThreadsList(page, threads)
 
   result = $vnode
 
@@ -168,8 +173,20 @@ import jester
 
 routes:
   get "/":
-    let thrs = await getLastThreads()
-    resp makeMainPage(thrs)
+    let page = 1
+    let thrs = await getLastThreads(start = (page - 1) * 30)
+    resp makeMainPage(page, thrs)
+
+  get "/p/@page?":
+    let page =
+      if @"page" == "":
+        1
+      else:
+        try: parseInt(@"page")
+        except ValueError: resp "Invalid page count"
+    let thrs = await getLastThreads(start = (page - 1) * 30)
+    resp makeMainPage(page, thrs)
+
   get "/t/@id":
     let id = try:
       ForumThreadId(parseInt(@"id"))
