@@ -14,6 +14,7 @@ type
   Author = object
     name: string
     rank: Rank
+    avatarUrl: string
 
   ForumPost = object
     id: Natural
@@ -44,6 +45,7 @@ proc getAuthor(n: JsonNode): Author =
   Author(
     name: n["name"].getStr(),
     rank: parseEnum[Rank](n["rank"].getStr()),
+    avatarUrl: n["avatarUrl"].getStr()
   )
 
 proc getThread(n: JsonNode): ForumThread =
@@ -77,10 +79,17 @@ proc getThreadInfo(id: ForumThreadId): Future[ForumThread] {.async.} =
   result.author = getAuthor(thr["author"])
 
   for p in data["posts"].getElems():
+    let hist = p["history"].getElems()
+    # Last version of the post is either
+    # stored in the info->content if the post wasn't edited,
+    # or in last element of the history array
+    let content =
+      if hist.len > 0: hist[^1]["content"].getStr()
+      else: p["info"]["content"].getStr()
     let post = ForumPost(
       id: p["id"].getInt(),
       author: getAuthor(p["author"]),
-      content: p["info"]["content"].getStr(),
+      content: content,
       created: fromUnix(p["info"]["creation"].getInt()),
       likeCount: len(p["likes"].getElems())
     )
@@ -89,47 +98,67 @@ proc getThreadInfo(id: ForumThreadId): Future[ForumThread] {.async.} =
 proc makeThreadEntry(thr: ForumThread): VNode =
   result = buildHtml():
     tr:
-      td(class="thread-title"): text thr.topic
+      td(class="thread-title"):
+        a(href="/t/" & $int(thr.id)): text thr.topic
       td(class="thread-author"): text "placeholder" #$thr.author
-      td(class="thread-views"): text $thr.views
+      td(class="hide-sm views-text"): text $thr.views
 
 proc makeThreadsList(threads: seq[ForumThread]): VNode =
   result = buildHtml():
-    table(id="threads-list", class="table"):
-      thead:
-        tr:
-          th: text "Topic"
-          th: text "Author"
-          th: text "Views"
-      tbody:
-        for thr in threads:
-          makeThreadEntry(thr)
+      table(id="threads-list", class="table"):
+        thead:
+          tr:
+            th: text "Topic"
+            th: text "Author"
+            th: text "Views"
+
+        tbody:
+          for thr in threads:
+            makeThreadEntry(thr)
 
 proc makeMainPage(threads: seq[ForumThread]): string =
   let vnode = buildHtml():
     html:
       head:
+        link(
+          rel="stylesheet",
+          href="https://forum.nim-lang.org/css/nimforum.css"
+        )
         title: text "Test forum"
       body:
-        makeThreadsList(threads)
+        section(class = "thread-list"):
+          makeThreadsList(threads)
 
   result = $vnode
 
 proc makePosts(thr: ForumThread): VNode =
   result = buildHtml():
-    section(class = "container"):
+    section(class = "container grid-xl"):
       tdiv(id = "thread-title", class = "title"):
-        text thr.topic
+        p(class = "title-text"): text thr.topic
+
       tdiv(class = "posts"):
         for post in thr.posts:
           tdiv(id = $post.id, class = "post"):
-            tdiv(class = "post-content"):
-              verbatim(post.content)
+            tdiv(class = "post-icon"):
+              figure(class = "post-avatar"):
+                img(src = post.author.avatarUrl, title = $post.author)
+
+            tdiv(class = "post-main"):
+              tdiv(class = "post-title"):
+                tdiv(class = "post-username"):
+                  text $post.author
+              tdiv(class = "post-content"):
+                verbatim(post.content)
 
 proc makeThreadPage(thr: ForumThread): string =
   let vnode = buildHtml():
     html:
       head:
+        link(
+          rel="stylesheet",
+          href="https://forum.nim-lang.org/css/nimforum.css"
+        )
         title: text fmt"{thr.topic} - Nim forum"
       body:
         makePosts(thr)
@@ -141,7 +170,7 @@ routes:
   get "/":
     let thrs = await getLastThreads()
     resp makeMainPage(thrs)
-  get "/thread@id":
+  get "/t/@id":
     let id = try:
       ForumThreadId(parseInt(@"id"))
     except ValueError:
