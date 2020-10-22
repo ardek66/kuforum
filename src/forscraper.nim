@@ -177,13 +177,10 @@ routes:
     let thrs = await getLastThreads(start = (page - 1) * 30)
     resp makeMainPage(page, thrs)
 
-  get "/p/@page?":
+  get "/p/@page":
     let page =
-      if @"page" == "":
-        1
-      else:
-        try: parseInt(@"page")
-        except ValueError: resp "Invalid page count"
+      try: parseInt(@"page")
+      except ValueError: resp "Invalid page count"
     let thrs = await getLastThreads(start = (page - 1) * 30)
     resp makeMainPage(page, thrs)
 
