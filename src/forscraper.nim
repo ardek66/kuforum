@@ -6,96 +6,39 @@ import std / [
 
 import karax / [karaxdsl, vdom]
 
+import types
+
 type
-  Rank = enum
-    Spammer, Moderated, Troll, Banned, EmailUnconfirmed,
-    User, Moderator, Admin
-
-  Author = object
-    name: string
-    rank: Rank
-    avatarUrl: string
-
-  ForumPost = object
-    id: Natural
-    author: Author
-    content: string
-    created: Time
-    likeCount: Natural
-
-  ForumThreadId = distinct Natural
-
-  ForumThread = ref object
-    id: ForumThreadId
-    activity: Time
-    author: Author
-    topic: string
-    views: Natural
-    posts: seq[ForumPost]
-    # TODO: add categories
-
-proc `$`(a: Author): string = a.name
+  ForumThreadId = distinct int
 
 const
   ThreadsUrl = "https://forum.nim-lang.org/threads.json"
   PostsUrl = "https://forum.nim-lang.org/posts.json"
 
+proc getPostContent(p: Post): string =
+  if p.history.len > 0:
+    p.history[^1].content
+  else:
+    p.info.content
 
-proc getAuthor(n: JsonNode): Author =
-  Author(
-    name: n["name"].getStr(),
-    rank: parseEnum[Rank](n["rank"].getStr()),
-    avatarUrl: n["avatarUrl"].getStr()
-  )
-
-proc getThread(n: JsonNode): ForumThread =
-  ForumThread(
-    id: ForumThreadId(n["id"].getInt()),
-    topic: n["topic"].getStr(),
-    views: n["views"].getInt(),
-    activity: fromUnix(n["activity"].getInt())
-  )
-
-proc getLastThreads(start = 0, count = 30): Future[seq[ForumThread]] {.async.} =
+proc getLastThreads(start = 0, count = 30): Future[seq[Thread]] {.async.} =
   var client = newAsyncHttpClient()
   var resp = await client.get(fmt"{ThreadsUrl}?start={start}&count={count}")
   if resp.code != Http200:
     return
 
-  let body = parseJson(await resp.body)
+  let body = parseJson(await resp.body).to(ThreadList)
 
-  for thr in body["threads"].getElems():
-    let thread = getThread(thr)
-    result.add thread
+  result = body.threads
 
-proc getThreadInfo(id: ForumThreadId): Future[ForumThread] {.async.} =
+proc getThreadInfo(id: ForumThreadId): Future[PostList] {.async.} =
   var client = newAsyncHttpClient()
   var resp = await client.get(fmt"{PostsUrl}?id={int(id)}")
   if resp.code != Http200:
     return
-  let data = parseJson(await resp.body)
-  let thr = data["thread"]
-  result = getThread(thr)
-  result.author = getAuthor(thr["author"])
+  result = parseJson(await resp.body).to(PostList)
 
-  for p in data["posts"].getElems():
-    let hist = p["history"].getElems()
-    # Last version of the post is either
-    # stored in the info->content if the post wasn't edited,
-    # or in last element of the history array
-    let content =
-      if hist.len > 0: hist[^1]["content"].getStr()
-      else: p["info"]["content"].getStr()
-    let post = ForumPost(
-      id: p["id"].getInt(),
-      author: getAuthor(p["author"]),
-      content: content,
-      created: fromUnix(p["info"]["creation"].getInt()),
-      likeCount: len(p["likes"].getElems())
-    )
-    result.posts.add post
-
-proc makeThreadEntry(thr: ForumThread): VNode =
+proc makeThreadEntry(thr: Thread): VNode =
   result = buildHtml():
     tr:
       td(class="thread-title"):
@@ -103,7 +46,7 @@ proc makeThreadEntry(thr: ForumThread): VNode =
       td(class="thread-author"): text "placeholder" #$thr.author
       td(class="hide-sm views-text"): text $thr.views
 
-proc makeThreadsList(p: int, threads: seq[ForumThread]): VNode =
+proc makeThreadsList(p: int, tl: seq[Thread]): VNode =
   result = buildHtml():
       table(id="threads-list", class="table"):
         thead:
@@ -113,7 +56,7 @@ proc makeThreadsList(p: int, threads: seq[ForumThread]): VNode =
             th: text "Views"
 
         tbody:
-          for thr in threads:
+          for thr in tl:
             makeThreadEntry(thr)
 
           tr(class = "load-more-separator"):
@@ -121,7 +64,7 @@ proc makeThreadsList(p: int, threads: seq[ForumThread]): VNode =
               a(href = "/p/" & $(p + 1)):
                 text "Go to the next page"
 
-proc makeMainPage(page: int, threads: seq[ForumThread]): string =
+proc makeMainPage(page: int, tl: seq[Thread]): string =
   let vnode = buildHtml():
     html:
       head:
@@ -132,18 +75,18 @@ proc makeMainPage(page: int, threads: seq[ForumThread]): string =
         title: text "Test forum"
       body:
         section(class = "thread-list"):
-          makeThreadsList(page, threads)
+          makeThreadsList(page, tl)
 
   result = $vnode
 
-proc makePosts(thr: ForumThread): VNode =
+proc makePosts(pl: PostList): VNode =
   result = buildHtml():
     section(class = "container grid-xl"):
       tdiv(id = "thread-title", class = "title"):
-        p(class = "title-text"): text thr.topic
+        p(class = "title-text"): text pl.thread.topic
 
       tdiv(class = "posts"):
-        for post in thr.posts:
+        for post in pl.posts:
           tdiv(id = $post.id, class = "post"):
             tdiv(class = "post-icon"):
               figure(class = "post-avatar"):
@@ -154,9 +97,9 @@ proc makePosts(thr: ForumThread): VNode =
                 tdiv(class = "post-username"):
                   text $post.author
               tdiv(class = "post-content"):
-                verbatim(post.content)
+                verbatim(getPostContent(post))
 
-proc makeThreadPage(thr: ForumThread): string =
+proc makeThreadPage(pl: PostList): string =
   let vnode = buildHtml():
     html:
       head:
@@ -164,9 +107,9 @@ proc makeThreadPage(thr: ForumThread): string =
           rel="stylesheet",
           href="https://forum.nim-lang.org/css/nimforum.css"
         )
-        title: text fmt"{thr.topic} - Nim forum"
+        title: text fmt"{pl.thread.topic} - Nim forum"
       body:
-        makePosts(thr)
+        makePosts(pl)
   result = $vnode
 
 import jester
