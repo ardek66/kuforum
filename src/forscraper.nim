@@ -25,18 +25,23 @@ proc getLastThreads(start = 0, count = 30): Future[seq[Thread]] {.async.} =
   var client = newAsyncHttpClient()
   var resp = await client.get(fmt"{ThreadsUrl}?start={start}&count={count}")
   if resp.code != Http200:
+    client.close()
     return
 
   let body = parseJson(await resp.body).to(ThreadList)
-
+  client.close()
+  
   result = body.threads
 
 proc getThreadInfo(id: ForumThreadId): Future[PostList] {.async.} =
   var client = newAsyncHttpClient()
   var resp = await client.get(fmt"{PostsUrl}?id={int(id)}")
   if resp.code != Http200:
+    client.close()
     return
+  
   result = parseJson(await resp.body).to(PostList)
+  client.close()
 
 proc makeThreadEntry(thr: Thread): VNode =
   result = buildHtml():
