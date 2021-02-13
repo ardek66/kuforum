@@ -1,4 +1,4 @@
-# Kuforum
-A light frontend to [Nimforum](https://github.com/nim-lang/nimforum)
+# Kuforum-Gemini
+A Gemini frontend to [Nimforum](https://github.com/nim-lang/nimforum)
 
-Uses Nimforum's JSON API and serves you static HTML pages
+Uses Nimforum's JSON API and serves you gemtext pages

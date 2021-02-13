@@ -1,10 +1,8 @@
 import std / [
   asyncdispatch, httpclient, sequtils,
-  json, htmlparser, times, options,
-  strformat, strutils
+  json, htmlparser, xmltree, times, options,
+  strformat, strutils, cgi,
 ]
-
-import karax / [karaxdsl, vdom]
 
 import types
 
@@ -16,10 +14,36 @@ const
   PostsUrl = "https://forum.nim-lang.org/posts.json"
 
 proc getPostContent(p: Post): string =
-  if p.history.len > 0:
-    p.history[^1].content
-  else:
-    p.info.content
+  let content =
+    if p.history.len > 0:
+      p.history[^1].content
+    else:
+      p.info.content
+
+  # God have mercy upon the following code
+  
+  let html = parseHtml(content)
+  for elem in html:
+    case elem.kind
+    of xnElement:
+      for i in 0..<elem.len:
+        let child = elem[i]
+        if child.kind == xnElement:
+          var text = child.innerText
+          case child.tag
+          of "li": result.add "\n* " & text
+          of "p": result.add '>' & text & '\n'
+          of "pre":
+            text.removeSuffix("Run")
+            result.add "\n````\n" & text & "\n```\n"
+          else: result.add text
+        
+        else: result.add child.text
+      
+    of xnText: result.add elem.text
+    else: discard
+
+  if not result.endsWith('\n'): result.add '\n' # Force newline
 
 proc getLastThreads(start = 0, count = 30): Future[seq[Thread]] {.async.} =
   var client = newAsyncHttpClient()
@@ -43,82 +67,40 @@ proc getThreadInfo(id: ForumThreadId): Future[PostList] {.async.} =
   result = parseJson(await resp.body).to(PostList)
   client.close()
 
-proc makeThreadEntry(thr: Thread): VNode =
-  result = buildHtml():
-    tr:
-      td(class="thread-title"):
-        a(href="/t/" & $int(thr.id)): text thr.topic
-      td(class="thread-author"): text "placeholder" #$thr.author
-      td(class="hide-sm views-text"): text $thr.views
+proc makeThreadsList(p: int, tl: seq[Thread]): string =
+  let scriptAddr = &"gemini://{getServerName()}/{getScriptFilename()}?"
+  result.add "# NimForum threads, page " & $p & '\n'
+  
+  for thr in tl:
+    result.add &"=> {scriptAddr & $thr.id} {int(thr.id)} {thr.topic}\n"
 
-proc makeThreadsList(p: int, tl: seq[Thread]): VNode =
-  result = buildHtml():
-      table(id="threads-list", class="table"):
-        thead:
-          tr:
-            th: text "Topic"
-            th: text "Author"
-            th: text "Views"
+  let nextPage = scriptAddr & 'p' & $(p+1)
+  result.add "\n=>" & nextPage & " Go to the next page"
 
-        tbody:
-          for thr in tl:
-            makeThreadEntry(thr)
 
-          tr(class = "load-more-separator"):
-            td(colspan = "6"):
-              a(href = "/p/" & $(p + 1)):
-                text "Go to the next page"
+proc makePosts(pl: PostList): string =
+     result.add "# " & pl.thread.topic & '\n'
 
-proc makeMainPage(page: int, tl: seq[Thread]): string =
-  let vnode = buildHtml():
-    html:
-      head:
-        link(
-          rel="stylesheet",
-          href="https://forum.nim-lang.org/css/nimforum.css"
-        )
-        title: text "Test forum"
-      body:
-        section(class = "thread-list"):
-          makeThreadsList(page, tl)
+     for post in pl.posts:
+       result.add "### " & $post.author & '\n'
+       result.add getPostContent(post) & '\n'
 
-  result = $vnode
+proc mainPage(page: int) {.async.} =
+  let thrs = await getLastThreads((page - 1) * 30)
+  stdout.write makeThreadsList(page, thrs)
 
-proc makePosts(pl: PostList): VNode =
-  result = buildHtml():
-    section(class = "container grid-xl"):
-      tdiv(id = "thread-title", class = "title"):
-        p(class = "title-text"): text pl.thread.topic
+proc threadPage(id: int) {.async.} =
+  let post = await getThreadInfo(ForumThreadId(id))
+  stdout.write makePosts(post)
 
-      tdiv(class = "posts"):
-        for post in pl.posts:
-          tdiv(id = $post.id, class = "post"):
-            tdiv(class = "post-icon"):
-              figure(class = "post-avatar"):
-                img(src = post.author.avatarUrl, title = $post.author)
-
-            tdiv(class = "post-main"):
-              tdiv(class = "post-title"):
-                tdiv(class = "post-username"):
-                  text $post.author
-              tdiv(class = "post-content"):
-                verbatim(getPostContent(post))
-
-proc makeThreadPage(pl: PostList): string =
-  let vnode = buildHtml():
-    html:
-      head:
-        link(
-          rel="stylesheet",
-          href="https://forum.nim-lang.org/css/nimforum.css"
-        )
-        title: text fmt"{pl.thread.topic} - Nim forum"
-      body:
-        makePosts(pl)
-  result = $vnode
-
-import jester
-
+let query = getQueryString()
+if query.len > 1:
+  if query[0] == 'p':
+    waitFor mainPage(parseInt(query[1..^1]))
+  else:
+    waitFor threadPage(parseInt(query))
+    
+#[
 routes:
   get "/":
     let page = 1
@@ -140,3 +122,5 @@ routes:
 
     let thr = await getThreadInfo(id)
     resp makeThreadPage(thr)
+]#
+
