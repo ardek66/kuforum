@@ -94,33 +94,10 @@ proc threadPage(id: int) {.async.} =
   stdout.write makePosts(post)
 
 let query = getQueryString()
-if query.len > 1:
-  if query[0] == 'p':
-    waitFor mainPage(parseInt(query[1..^1]))
-  else:
+if query[0] == 'p' and query.len > 1:
+  waitFor mainPage(parseInt(query[1..^1]))
+else:
+  try:
     waitFor threadPage(parseInt(query))
-    
-#[
-routes:
-  get "/":
-    let page = 1
-    let thrs = await getLastThreads(start = (page - 1) * 30)
-    resp makeMainPage(page, thrs)
-
-  get "/p/@page":
-    let page =
-      try: parseInt(@"page")
-      except ValueError: resp "Invalid page count"
-    let thrs = await getLastThreads(start = (page - 1) * 30)
-    resp makeMainPage(page, thrs)
-
-  get "/t/@id":
-    let id = try:
-      ForumThreadId(parseInt(@"id"))
-    except ValueError:
-      resp "Invalid thread id"
-
-    let thr = await getThreadInfo(id)
-    resp makeThreadPage(thr)
-]#
-
+  except ValueError:
+    stdout.write "Invalid thread ID " & query
